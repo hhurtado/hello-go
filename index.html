@@ -4,12 +4,17 @@ permalink: /
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Hello Go!</title>
   </head>
   <body>
 
     <h1>Hello Go!</h1>
-    <p>This is a paragraph.</p>
+    <p>These are the available releases:</p>
 
+    {% for rel in site.data.releases.releases %}
+    <div>
+      <h3><a href="keys/{% rel.name %}.gpg">{% rel.name %}</a></h3>
+      <p>{% rel.description %}</p>
+    </div>
+    {% endfor %}
   </body>
 </html>
