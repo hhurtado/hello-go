@@ -12,8 +12,8 @@ permalink: /
 
     {% for rel in site.data.releases.releases %}
     <div>
-      <h3><a href="keys/{% rel.name %}.gpg">{% rel.name %}</a></h3>
-      <p>{% rel.description %}</p>
+      <h3><a href="keys/{{ rel.name }}.gpg">{{ rel.name }}</a></h3>
+      <p>{{ rel.description }}</p>
     </div>
     {% endfor %}
   </body>
