@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*.*.*
+env:
+  GO_VERSION: 1.14.4
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-go@v2
+      id: setup-go
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Select custom release notes
+      id: release-notes
+      run: |
+        RELNOTES="docs/release-notes/RELEASE-${GITHUB_REF#refs/tags/}.md"
+        [[ -f "$RELNOTES" ]] && echo ::set-output name=ARGS::--release-notes $RELNOTES || true
+
+    - name: Clone gh-pages branch to release-keys dir
+      uses: actions/checkout@v2
+      with:
+        ref: gh-pages
+        path: release-keys
+        clean: false
+        persist-credentials: false
+
+    - name: Remove .git from gh-pages checkout
+      run: |
+        rm -rf release-keys/.git
+
+    - name: Check if release key already exists
+      run: |
+        [[ -e release-keys/release-key-"${GITHUB_REF#refs/tags/}".gpg ]] && echo 'Release key already exists!' && exit 1 || true
+
+    - name: Generate release signing key
+      run: |
+        SIGNER=$(gpg --batch --generate-key <<EOF 2>&1 | awk '/^gpg: key [A-Z0-9]* marked as ultimately trusted/ { print $3; exit }'
+        %echo Generating a signing OpenPGP key
+        %no-protection
+        Key-Type: RSA
+        Key-Length: 4096
+        Key-Usage: sign
+        Name-Real: go-hello Release Bot
+        Name-Comment: ${GITHUB_REF#refs/tags/}
+        Name-Email: release-bot@go-hello
+        Expire-Date: 1d
+        %echo done
+        EOF
+        )
+
+        declare -a REVOKERS
+
+        for revoker in .github/revokers/*
+        do
+          gpg --import "$revoker"
+          FINGERPRINT=$(basename $revoker .gpg)
+          REVOKERS+=($FINGERPRINT)
+        done
+
+        sudo apt install expect
+        expect -f- "$SIGNER" "${REVOKERS[@]}" <<'EOF'
+        set SIGNER [lindex $argv 0]
+        set REVOKERS [lrange $argv 1 end]
+
+        if { $SIGNER eq "" || 0 == [llength $REVOKERS] } {
+          puts stderr "usage: addrevokers SIGNER_KEY REVOKER_KEY..."
+          exit 1
+        }
+
+        spawn gpg --command-fd 0 --status-fd 1 --edit-key $SIGNER
+
+        foreach REVOKER $REVOKERS {
+          send "addrevoker\n"
+          expect "GET_LINE keyedit.add_revoker"
+          send "$REVOKER\n"
+          expect "GET_BOOL keyedit.add_revoker.okay"
+          send "y\n"
+          expect "GET_LINE keyedit.prompt"
+        }
+
+        send "save\n"
+        expect eof
+        puts "Done."
+        EOF
+
+    - name: Export public GPG key
+      run: |
+        gpg --no-tty --armor --output release-keys/release-key-"${GITHUB_REF#refs/tags/}".gpg --export pancho@pancho.name
+        echo release-keys/release-key-"${GITHUB_REF#refs/tags/}".gpg >> release-keys/index.txt
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./release-keys
+        keep_files: true
+
+    - name: Clean release-keys dir
+      run: |
+        rm -rf release-keys
+
+    - uses: goreleaser/goreleaser-action@v2
+      with:
+        args: release --rm-dist ${{ steps.release-notes.outputs.ARGS }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Remove GNUPGHOME
+      run: |
+        rm -rf ~/.gnupg
